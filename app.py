@@ -33,7 +33,7 @@ init_logging()
 
 _LOGGER = logging.getLogger("thoth.prescription_sync_job")
 
-__version__ = "0.0.0"
+__version__ = "0.0.1"
 __component_version__ = f"{__version__}+common.{thoth_common_version}.storages.{thoth_storages_version}"
 
 
