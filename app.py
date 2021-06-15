@@ -18,23 +18,21 @@
 """Sync prescription from a repo to Ceph so it is available in deployment."""
 
 import logging
-import os
-import tempfile
 
+import os
 import click
 import yaml
 from git import Repo
 from thoth.common import init_logging
 from thoth.common import __version__ as thoth_common_version
-from thoth.storages import CephStore
-from thoth.storages import __version__ as thoth_storages_version
 
 init_logging()
 
 _LOGGER = logging.getLogger("thoth.prescription_sync_job")
+_PRESCRIPTION_METADATA_FILE = "_prescription_metadata.yaml"
 
 __version__ = "0.0.1"
-__component_version__ = f"{__version__}+common.{thoth_common_version}.storages.{thoth_storages_version}"
+__component_version__ = f"{__version__}+common.{thoth_common_version}"
 
 
 def _print_version(ctx: click.Context, _, value: str):
@@ -49,7 +47,11 @@ def _print_version(ctx: click.Context, _, value: str):
 @click.group()
 @click.pass_context
 @click.option(
-    "-v", "--verbose", is_flag=True, envvar="THOTH_PRESCRIPTION_SYNC_DEBUG", help="Be verbose about what's going on.",
+    "-v",
+    "--verbose",
+    is_flag=True,
+    envvar="THOTH_PRESCRIPTION_SYNC_DEBUG",
+    help="Be verbose about what's going on.",
 )
 @click.option(
     "--version",
@@ -83,14 +85,13 @@ def cli(ctx=None, verbose: bool = False):
     help="A repository where prescription is stored.",
 )
 @click.option(
-    "--prescription-path",
-    "-p",
+    "--output",
+    "-o",
     type=str,
-    envvar="THOTH_PRESCRIPTION_SYNC_PATH",
-    default="prescription.yaml",
+    envvar="THOTH_PRESCRIPTION_SYNC_OUTPUT",
     metavar="PATH",
     required=True,
-    help="A path to prescription within the repository.",
+    help="A path where prescriptions should be cloned.",
 )
 @click.option(
     "--no-release-adjustment",
@@ -101,28 +102,25 @@ def cli(ctx=None, verbose: bool = False):
     required=False,
     help="Do not add Git SHA info to the prescription release.",
 )
-def sync(repo_url: str, prescription_path: str, no_release_adjustment: bool) -> None:
-    """Sync the given prescription document."""
-    with tempfile.TemporaryDirectory() as dir_name:
-        _LOGGER.info("Cloning %r", repo_url)
-        repo = Repo.clone_from(repo_url, dir_name, depth=1)
-        sha = repo.head.commit.hexsha
-
-        _LOGGER.info("Loading prescription from %r", prescription_path)
-        with open(os.path.join(dir_name, prescription_path)) as prescription_file:
-            content = yaml.safe_load(prescription_file)
+def sync(repo_url: str, output: str, no_release_adjustment: bool) -> None:
+    """Clone prescriptions and place them to output directory."""
+    _LOGGER.info("Cloning %r to %r", repo_url, output)
+    repo = Repo.clone_from(repo_url, output, depth=1)
 
     if not no_release_adjustment:
-        content["spec"]["release"] = f"{content['spec']['release']}.{sha}"
+        sha = repo.head.commit.hexsha
 
-    prescription = yaml.safe_dump(content)
+        _LOGGER.info("Adjusting release information in %r to include commit sha %r", _PRESCRIPTION_METADATA_FILE, sha)
 
-    prefix = f"{os.environ['THOTH_CEPH_BUCKET_PREFIX']}/{os.environ['THOTH_DEPLOYMENT_NAME']}"
-    _LOGGER.info("Storing prescription with hash %r to remote Ceph using prefix %r", sha, prefix)
+        metadata_path = os.path.join(output, _PRESCRIPTION_METADATA_FILE)
 
-    ceph = CephStore(prefix)
-    ceph.connect()
-    ceph.store_blob(prescription, prescription_path)
+        with open(metadata_path) as f:
+            content = yaml.safe_load(f)
+
+        content["prescription"]["release"] = f"{content['prescription']['release']}.{sha}"
+
+        with open(metadata_path, "w") as f:
+            yaml.safe_dump(content, f)
 
 
 __name__ == "__main__" and cli()
